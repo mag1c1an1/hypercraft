@@ -2,7 +2,8 @@ use x86::{bits64::vmx, vmx::VmFail};
 use x86_64::registers::control::{Cr0, Cr4, Cr4Flags};
 
 use crate::{HyperCraftHal, HyperError, HyperResult};
-use crate::arch::msr::{Msr, MsrReadWrite, VmxBasic, FeatureControl, FeatureControlFlags};
+use crate::arch::msr::{FeatureControl, FeatureControlFlags, Msr, MsrReadWrite, VmxBasic};
+
 use super::detect::has_hardware_support;
 use super::region::VmxRegion;
 

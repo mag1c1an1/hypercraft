@@ -1,10 +1,7 @@
-use alloc::boxed::Box;
-use arrayvec::ArrayVec;
 use spin::Once;
 
-use crate::arch::{VCpu, VM};
-use crate::{GuestPageTableTrait, HyperCraftHal, HyperError, HyperResult,};
-
+use crate::{HyperCraftHal, HyperError, HyperResult};
+use crate::arch::VCpu;
 
 /// The maximum number of CPUs we can support.
 pub const MAX_CPUS: usize = 8;
@@ -49,4 +46,5 @@ impl<H: HyperCraftHal> VmCpus<H> {
 
 // Safety: Each VCpu is wrapped with a Mutex to provide safe concurrent access to VCpu.
 unsafe impl<H: HyperCraftHal> Sync for VmCpus<H> {}
+
 unsafe impl<H: HyperCraftHal> Send for VmCpus<H> {}

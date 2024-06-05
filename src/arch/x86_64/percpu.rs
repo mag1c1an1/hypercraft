@@ -1,5 +1,5 @@
-use crate::{HyperCraftHal, HostPhysAddr, GuestPhysAddr};
-use crate::{HyperResult, HyperError};
+use crate::{GuestPhysAddr, HostPhysAddr, HyperCraftHal};
+use crate::{HyperError, HyperResult};
 use crate::arch::vmx::VmxPerCpuState;
 
 use super::VCpu;
@@ -14,7 +14,7 @@ impl<H: HyperCraftHal> PerCpu<H> {
     /// Create an uninitialized instance.
     pub fn new(cpu_id: usize) -> Self {
         Self {
-            cpu_id: cpu_id,
+            cpu_id,
             arch: VmxPerCpuState::new(),
         }
     }
@@ -30,7 +30,7 @@ impl<H: HyperCraftHal> PerCpu<H> {
             Ok(_) => {
                 info!("VMX enabled on cpu {}.", self.cpu_id);
                 Ok(())
-            },
+            }
             e @ Err(_) => {
                 e
             }
@@ -43,7 +43,7 @@ impl<H: HyperCraftHal> PerCpu<H> {
             Ok(_) => {
                 info!("VMX disabled on cpu {}.", self.cpu_id);
                 Ok(())
-            },
+            }
             e @ Err(_) => {
                 e
             }

@@ -1,12 +1,12 @@
 //! reference: https://github.com/rivosinc/salus/blob/main/src/smp.rs
+use alloc::{collections::VecDeque, vec::Vec};
 use core::arch::asm;
 
-use alloc::{collections::VecDeque, vec::Vec};
 use spin::{Mutex, Once};
 
 use crate::{
-    memory::PAGE_SIZE_4K, GuestPageTableTrait, GuestPhysAddr, GuestVirtAddr, HostPhysAddr,
-    HostVirtAddr, HyperCraftHal, HyperError, HyperResult, VCpu,
+    GuestPageTableTrait, GuestPhysAddr, GuestVirtAddr, HostPhysAddr, HostVirtAddr,
+    HyperCraftHal, HyperError, HyperResult, memory::PAGE_SIZE_4K, VCpu,
 };
 
 use super::detect::detect_h_extension;
@@ -117,8 +117,8 @@ impl<H: HyperCraftHal> PerCpu<H> {
     }
 }
 
-// PerCpu state obvioudly cannot be shared between threads.
-impl<H: HyperCraftHal> !Sync for PerCpu<H> {}
+// PerCpu state obviously cannot be shared between threads.
+impl<H: HyperCraftHal> ! Sync for PerCpu<H> {}
 
 // /// Boots secondary CPUs, using the HSM SBI call. Upon return, all secondary CPUs will have
 // /// entered secondary_init().

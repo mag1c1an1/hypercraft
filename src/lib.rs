@@ -17,9 +17,27 @@
 #![feature(naked_functions, asm_const, negative_impls, stdsimd, inline_const, concat_idents)]
 
 #[macro_use]
-extern crate log;
-#[macro_use]
 extern crate alloc;
+#[macro_use]
+extern crate log;
+
+#[cfg(not(target_arch = "aarch64"))]
+pub use arch::{
+    GprIndex, HyperCallMsg, init_hv_runtime, VmExitInfo,
+};
+pub use arch::{
+    NestedPageTable, PerCpu, VCpu, VM,
+};
+#[cfg(target_arch = "x86_64")]
+pub use arch::{VmxExitInfo, VmxExitReason};
+#[cfg(target_arch = "aarch64")]
+pub use arch::lower_aarch64_synchronous;
+pub use hal::HyperCraftHal;
+pub use memory::{
+    GuestPageNum, GuestPageTableTrait, GuestPhysAddr, GuestVirtAddr, HostPageNum, HostPhysAddr,
+    HostVirtAddr,
+};
+pub use vcpus::VmCpus;
 
 #[cfg(target_arch = "aarch64")]
 #[path = "arch/aarch64/mod.rs"]
@@ -35,33 +53,11 @@ mod hal;
 mod memory;
 mod traits;
 mod vcpus;
+mod sched;
 
 /// HyperCraft Result Define.
 pub type HyperResult<T = ()> = Result<T, HyperError>;
 
-
-#[cfg(not(target_arch = "aarch64"))]
-pub use arch::{
-    init_hv_runtime, GprIndex, HyperCallMsg, VmExitInfo,
-};
-
-
-pub use arch::{
-    NestedPageTable, PerCpu, VCpu, VM,
-};
-
-pub use hal::HyperCraftHal;
-pub use memory::{
-    GuestPageNum, GuestPageTableTrait, GuestPhysAddr, GuestVirtAddr, HostPageNum, HostPhysAddr,
-    HostVirtAddr,
-};
-pub use vcpus::VmCpus;
-
-#[cfg(target_arch = "aarch64")]
-pub use arch::lower_aarch64_synchronous;
-
-#[cfg(target_arch = "x86_64")]
-pub use arch::{VmxExitReason, VmxExitInfo};
 
 /// The error type for hypervisor operation failures.
 #[derive(Debug, PartialEq)]

@@ -1,3 +1,13 @@
+/// Nested page table define.
+pub use ept::ExtendedPageTable as NestedPageTable;
+use page_table::PagingIf;
+pub use percpu::PerCpu;
+pub use vmx::{VmxExitInfo, VmxExitReason};
+/// VCpu define.
+pub use vmx::VmxVcpu as VCpu;
+
+use crate::{GuestPageTableTrait, HyperCraftHal};
+
 #[macro_use]
 mod regs;
 
@@ -10,23 +20,12 @@ mod msr;
 mod vmx;
 mod percpu;
 
-use crate::{GuestPageTableTrait, HyperCraftHal};
-use page_table::PagingIf;
-
 /// Initialize the hypervisor runtime.
 pub fn init_hv_runtime() {
     if !vmx::has_hardware_support() {
         panic!("VMX not supported");
     }
 }
-
-/// Nested page table define.
-pub use ept::ExtendedPageTable as NestedPageTable;
-
-/// VCpu define.
-pub use vmx::VmxVcpu as VCpu;
-pub use percpu::PerCpu;
-pub use vmx::{VmxExitReason, VmxExitInfo};
 
 ////// Following are things to be implemented
 
