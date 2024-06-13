@@ -54,6 +54,7 @@ mod memory;
 mod traits;
 mod vcpus;
 mod sched;
+pub mod smp;
 
 /// HyperCraft Result Define.
 pub type HyperResult<T = ()> = Result<T, HyperError>;
