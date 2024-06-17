@@ -1,6 +1,7 @@
 use bit_field::BitField;
 use bitflags::bitflags;
 use core::arch::asm;
+use core::fmt::{Debug, Formatter};
 use page_table_entry::MappingFlags;
 use x86::bits64::{
     rflags::{self, RFlags},
@@ -482,7 +483,7 @@ pub enum VmcsReadOnlyNW {
 vmcs_read!(VmcsReadOnlyNW, usize);
 
 /// VM-Exit Informations. (SDM Vol. 3C, Section 24.9.1)
-#[derive(Debug)]
+// #[derive(Debug)]
 pub struct VmxExitInfo {
     /// VM-entry failure. (0 = true VM exit; 1 = VM-entry failure)
     pub entry_failure: bool,
@@ -494,6 +495,18 @@ pub struct VmxExitInfo {
     /// Guest `RIP` where the VM exit occurs.
     pub guest_rip: usize,
 }
+
+impl Debug for VmxExitInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("VmExitInfo")
+            .field("entry_failure", &self.entry_failure)
+            .field("exit_reason", &self.exit_reason)
+            .field("exit_instruction_length", &self.exit_instruction_length)
+            .field("guest_rip", &format_args!("0x{:x}", self.guest_rip))
+            .finish()
+    }
+}
+
 
 /// VM-Entry/VM-Exit Interruption-Information Field. (SDM Vol. 3C, Section 24.8.3, 24.9.2)
 #[derive(Debug)]
