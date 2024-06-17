@@ -33,7 +33,8 @@ pub fn init_hv_runtime() {
 impl<H: HyperCraftHal> VCpu<H> {
     /// Get the vcpu id.
     pub fn vcpu_id(&self) -> usize {
-        todo!()
+        // todo
+       0
     }
 }
 
