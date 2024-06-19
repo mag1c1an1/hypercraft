@@ -2,8 +2,6 @@
 🚧WIP🚧 hypercraft is a VMM library written in Rust. If you are interested in Design & Implement about this project, please see this [discussion](https://github.com/orgs/rcore-os/discussions/13). Currently, hypercraft relies heavily on the [Arceos](https://github.com/rcore-os/arceos) crate, reusing multiple crates and modules from arceos for development.
 
 ## Build & Run
-
-### Riscv Linux
 **Clone project**
 ```
 # create workspace
@@ -17,9 +15,10 @@ git checkout hypervisor
 git submodule update --init --recursive
 ```
 
+### Riscv Linux
 **Download Disk File & Linux Binary**  
 
-Download disk file from Baidu Cloud Disk to `$(WORKSPACE)/guest/linux`:
+Download disk file from Baidu Cloud Disk to `$(WORKSPACE)/arceos/apps/hv/guest/linux`:
 
 链接: https://pan.baidu.com/s/1OGuOjMe0VEFvDhPg3nzSjA?pwd=5ewv 提取码: 5ewv 复制这段内容后打开百度网盘手机App，操作更方便哦 
 --来自百度网盘超级会员v2的分享
@@ -31,21 +30,9 @@ make ARCH=riscv64 A=apps/hv HV=y LOG=info run
 ```
 
 ### aarch64 nimbos
-**Clone project**
-```
-# create workspace
-mkdir $(WORKSPACE)
-cd $(WORKSPACE)
-
-# clone project
-git clone https://github.com/arceos-hypervisor/arceos.git
-cd arceos
-git checkout hypervisor
-git submodule update --init --recursive
-```
 
 **Download NimbOS Image**  
-Download nimbos-aarch64.bin in [nimbos](https://drive.google.com/drive/folders/1Hfn6RI0GsNxoAmMQ1Gj1kZdcm_NkhRP0?usp=sharing) from Google Cloud Disk to `$(WORKSPACE)/arceos/apps/hv/guest/nimbos`: 
+Download `nimbos-aarch64.bin` file from image&rootfs/nimbos/ in [image&rootfs](https://drive.google.com/drive/folders/1YXffW-kQntLLgaEU9kZmmUNquLe80Awl?usp=drive_link) from Google Cloud Disk to `$(WORKSPACE)/arceos/apps/hv/guest/nimbos`.
 
 **Build & Run**
 ```
@@ -53,23 +40,20 @@ Download nimbos-aarch64.bin in [nimbos](https://drive.google.com/drive/folders/1
 make ARCH=aarch64 A=apps/hv HV=y LOG=info GUEST=nimbos run
 ```
 
-### x86_64 nimbos
-**Clone project**
-```
-# create workspace
-mkdir $(WORKSPACE)
-cd $(WORKSPACE)
+### aarch64 linux
+**Download Linux Image**  
+Download `linux-aarch64.bin` and `rootfs-aarch64.img` file from image&rootfs/linux/ in [image&rootfs](https://drive.google.com/drive/folders/1YXffW-kQntLLgaEU9kZmmUNquLe80Awl?usp=drive_link) from Google Cloud Disk to `$(WORKSPACE)/arceos/apps/hv/guest/linux`. \
+<span style="color: lightgray;">(You can also run a smaller trimmed Linux image file, linux-aarch64-trimmed.bin, located in the image&rootfs/linux/ directory. You need to rename it to linux-aarch64.bin by command "mv linux-aarch64-trimmed.bin linux-aarch64.bin")</span>
 
-# clone project
-git clone https://github.com/arceos-hypervisor/arceos.git
-cd arceos
-git checkout hypervisor
-git submodule update --init --recursive
+**Build & Run**
 ```
+# build & run
+make ARCH=aarch64 A=apps/hv HV=y LOG=info run
+```
+
+### x86_64 nimbos
 
 **Build NimbOS BIOS**  
-Download [nimbos image](https://drive.google.com/file/d/1Q3yNmpnh3pamrhHGZV_uz6wUFGklidGk/view?usp=drive_link) from Google Cloud Disk to `$(WORKSPACE)/arceos/apps/hv/guest/nimbos`: 
-
 ```
 # build nimbos bios
 cd apps/hv/guest/nimbos/bios
@@ -78,7 +62,7 @@ cp out/rvm-bios.bin ..
 ```
 
 **Download NimbOS Image**  
-Download nimbos-x86.bin from [here](https://drive.google.com/drive/folders/1Hfn6RI0GsNxoAmMQ1Gj1kZdcm_NkhRP0?usp=sharing) to `$(WORKSPACE)/arceos/apps/hv/guest/nimbos` and rename it to `nimbos.bin`: 
+Download `nimbos-x86.bin` file from image&rootfs/nimbos/ in [image&rootfs](https://drive.google.com/drive/folders/1YXffW-kQntLLgaEU9kZmmUNquLe80Awl?usp=drive_link) to `$(WORKSPACE)/arceos/apps/hv/guest/nimbos` and rename it to `nimbos.bin`.
 
 **Build & Run**
 ```

@@ -3,9 +3,9 @@ use core::arch::asm;
 
 use spin::{Mutex, Once};
 
-use crate::{HyperCraftHal, HyperResult, HyperError, HostPhysAddr, HostVirtAddr, GuestPhysAddr};
-use crate::arch::vcpu::VCpu;
+use crate::{GuestPhysAddr, HostPhysAddr, HostVirtAddr, HyperCraftHal, HyperError, HyperResult};
 use crate::arch::ContextFrame;
+use crate::arch::vcpu::VCpu;
 use crate::traits::ContextFrameTrait;
 
 /// need to move to a suitable file?
@@ -20,7 +20,7 @@ pub const PTE_PER_PAGE: usize = 512;
 /// sits at the top of a secondary CPU's stack.
 #[repr(C)]
 #[repr(align(4096))]
-pub struct PerCpu<H:HyperCraftHal>{   //stack_top_addr has no use yet?
+pub struct PerCpu<H: HyperCraftHal> {   //stack_top_addr has no use yet?
     /// per cpu id
     pub cpu_id: usize,
     stack_top_addr: HostVirtAddr,
@@ -32,7 +32,7 @@ pub struct PerCpu<H:HyperCraftHal>{   //stack_top_addr has no use yet?
 /// The base address of the per-CPU memory region.
 static PER_CPU_BASE: Once<HostPhysAddr> = Once::new();
 
-impl <H: HyperCraftHal> PerCpu<H> {
+impl<H: HyperCraftHal> PerCpu<H> {
     const fn new(cpu_id: usize, stack_top_addr: HostVirtAddr) -> Self {
         Self {
             cpu_id: cpu_id,
@@ -129,47 +129,4 @@ impl <H: HyperCraftHal> PerCpu<H> {
         // Ok(BOOT_STACK as GuestPhysAddr)
         Ok(0 as GuestPhysAddr)
     }
-
 }
-
-/*
-pub fn current_cpu() -> &'static mut Cpu {
-    // Make sure PerCpu has been set up.
-    assert!(PER_CPU_BASE.get().is_some());
-    let tp: u64;
-    unsafe { core::arch::asm!("mrs {}, TPIDR_EL2", out(reg) tp) };
-    let pcpu_ptr = tp as *mut Cpu<dyn HyperCraftHal>;
-    let pcpu = unsafe {
-        // Safe since TP is set uo to point to a valid PerCpu
-        pcpu_ptr.as_mut().unwrap()
-    };
-    pcpu
-}
-
- 
-#[def_percpu]
-pub static mut CPU: Cpu = Cpu::new(0);  // hard code for one cpu
-
-pub fn current_cpu() -> &'static mut Cpu {
-    unsafe {
-        let ptr: *const Cpu = CPU.current_ptr();
-        mem::transmute::<*const Cpu, &'static mut Cpu>(ptr)
-    }
-}
-
-pub fn init_cpu() {
-    cpu_interface_init();
-
-    let current_cpu = current_cpu();
-    let state = CpuState::CpuIdle;
-    let sp = current_cpu().stack.as_ptr() as usize + CPU_STACK_SIZE;
-    let size = core::mem::size_of::<ContextFrame>();
-    let context_addr = (sp - size) as *mut _;
-    CPU.with_current(|c| {
-        c.cpu_state = state;
-        c.context_addr = context_addr;
-    });
-
-    info!("Core {} init ok", current_cpu.cpu_id);
-}
-*/

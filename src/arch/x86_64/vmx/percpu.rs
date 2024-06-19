@@ -3,7 +3,8 @@ use x86_64::registers::control::{Cr0, Cr4, Cr4Flags, Cr0Flags};
 use raw_cpuid::CpuId;
 
 use crate::{HyperCraftHal, HyperError, HyperResult};
-use crate::arch::msr::{Msr, MsrReadWrite, VmxBasic, FeatureControl, FeatureControlFlags};
+use crate::arch::msr::{FeatureControl, FeatureControlFlags, Msr, MsrReadWrite, VmxBasic};
+
 use super::detect::has_hardware_support;
 use super::region::VmxRegion;
 #[cfg(feature = "type1_5")]
