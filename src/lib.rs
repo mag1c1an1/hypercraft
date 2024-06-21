@@ -17,8 +17,6 @@
     naked_functions,
     asm_const,
     negative_impls,
-    stdsimd,
-    inline_const,
     concat_idents
 )]
 

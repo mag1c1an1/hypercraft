@@ -649,10 +649,63 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         }
         level as usize
     }
+    fn set_cr(&mut self, cr_idx: usize, val: u64) {
+        (|| -> HyperResult {
+            // debug!("set guest CR{} to val {:#x}", cr_idx, val);
+            match cr_idx {
+                0 => {
+                    // Retrieve/validate restrictions on CR0
+                    //
+                    // In addition to what the VMX MSRs tell us, make sure that
+                    // - NW and CD are kept off as they are not updated on VM exit and we
+                    //   don't want them enabled for performance reasons while in root mode
+                    // - PE and PG can be freely chosen (by the guest) because we demand
+                    //   unrestricted guest mode support anyway
+                    // - ET is ignored
+                    let must0 = Msr::IA32_VMX_CR0_FIXED1.read()
+                        & !(Cr0Flags::NOT_WRITE_THROUGH | Cr0Flags::CACHE_DISABLE).bits();
+                    let must1 = Msr::IA32_VMX_CR0_FIXED0.read()
+                        & !(Cr0Flags::PAGING | Cr0Flags::PROTECTED_MODE_ENABLE).bits();
+                    VmcsGuestNW::CR0.write(((val & must0) | must1) as _)?;
+                    VmcsControlNW::CR0_READ_SHADOW.write(val as _)?;
+                    VmcsControlNW::CR0_GUEST_HOST_MASK.write((must1 | !must0) as _)?;
+                }
+                3 => VmcsGuestNW::CR3.write(val as _)?,
+                4 => {
+                    // Retrieve/validate restrictions on CR4
+                    let must0 = Msr::IA32_VMX_CR4_FIXED1.read();
+                    let must1 = Msr::IA32_VMX_CR4_FIXED0.read();
+                    let val = val | Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS.bits();
+                    VmcsGuestNW::CR4.write(((val & must0) | must1) as _)?;
+                    VmcsControlNW::CR4_READ_SHADOW.write(val as _)?;
+                    VmcsControlNW::CR4_GUEST_HOST_MASK.write((must1 | !must0) as _)?;
+                }
+                _ => unreachable!(),
+            };
+            Ok(())
+        })()
+            .expect("Failed to write guest control register")
+    }
+
+    fn cr(&self, cr_idx: usize) -> usize {
+        (|| -> HyperResult<usize> {
+            Ok(match cr_idx {
+                0 => VmcsGuestNW::CR0.read()?,
+                3 => VmcsGuestNW::CR3.read()?,
+                4 => {
+                    let host_mask = VmcsControlNW::CR4_GUEST_HOST_MASK.read()?;
+                    (VmcsControlNW::CR4_READ_SHADOW.read()? & host_mask)
+                        | (VmcsGuestNW::CR4.read()? & !host_mask)
+                }
+                _ => unreachable!(),
+            })
+        })()
+            .expect("Failed to read guest control register")
+    }
 }
 
-// Implementaton for type1.5 hypervisor
-// #[cfg(feature = "type1_5")]
+// Implementation for type1.5 hypervisor
+#[cfg(feature = "type1_5")]
 impl<H: HyperCraftHal> VmxVcpu<H> {
     /// Create a new [`VmxVcpu`] for type1.5 hypervisor
     pub fn new_type15(
@@ -801,60 +854,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         VmcsGuest32::VMX_PREEMPTION_TIMER_VALUE.write(0)?;
         Ok(())
     }
-
-    fn set_cr(&mut self, cr_idx: usize, val: u64) {
-        (|| -> HyperResult {
-            // debug!("set guest CR{} to val {:#x}", cr_idx, val);
-            match cr_idx {
-                0 => {
-                    // Retrieve/validate restrictions on CR0
-                    //
-                    // In addition to what the VMX MSRs tell us, make sure that
-                    // - NW and CD are kept off as they are not updated on VM exit and we
-                    //   don't want them enabled for performance reasons while in root mode
-                    // - PE and PG can be freely chosen (by the guest) because we demand
-                    //   unrestricted guest mode support anyway
-                    // - ET is ignored
-                    let must0 = Msr::IA32_VMX_CR0_FIXED1.read()
-                        & !(Cr0Flags::NOT_WRITE_THROUGH | Cr0Flags::CACHE_DISABLE).bits();
-                    let must1 = Msr::IA32_VMX_CR0_FIXED0.read()
-                        & !(Cr0Flags::PAGING | Cr0Flags::PROTECTED_MODE_ENABLE).bits();
-                    VmcsGuestNW::CR0.write(((val & must0) | must1) as _)?;
-                    VmcsControlNW::CR0_READ_SHADOW.write(val as _)?;
-                    VmcsControlNW::CR0_GUEST_HOST_MASK.write((must1 | !must0) as _)?;
-                }
-                3 => VmcsGuestNW::CR3.write(val as _)?,
-                4 => {
-                    // Retrieve/validate restrictions on CR4
-                    let must0 = Msr::IA32_VMX_CR4_FIXED1.read();
-                    let must1 = Msr::IA32_VMX_CR4_FIXED0.read();
-                    let val = val | Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS.bits();
-                    VmcsGuestNW::CR4.write(((val & must0) | must1) as _)?;
-                    VmcsControlNW::CR4_READ_SHADOW.write(val as _)?;
-                    VmcsControlNW::CR4_GUEST_HOST_MASK.write((must1 | !must0) as _)?;
-                }
-                _ => unreachable!(),
-            };
-            Ok(())
-        })()
-        .expect("Failed to write guest control register")
-    }
-
-    fn cr(&self, cr_idx: usize) -> usize {
-        (|| -> HyperResult<usize> {
-            Ok(match cr_idx {
-                0 => VmcsGuestNW::CR0.read()?,
-                3 => VmcsGuestNW::CR3.read()?,
-                4 => {
-                    let host_mask = VmcsControlNW::CR4_GUEST_HOST_MASK.read()?;
-                    (VmcsControlNW::CR4_READ_SHADOW.read()? & host_mask)
-                        | (VmcsGuestNW::CR4.read()? & !host_mask)
-                }
-                _ => unreachable!(),
-            })
-        })()
-        .expect("Failed to read guest control register")
-    }
 }
 
 /// Get ready then vmlaunch or vmresume.
@@ -959,11 +958,14 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             VmxExitReason::PREEMPTION_TIMER => Some(self.handle_vmx_preemption_timer()),
             VmxExitReason::XSETBV => Some(self.handle_xsetbv()),
             VmxExitReason::CR_ACCESS => Some(self.handle_cr()),
-            VmxExitReason::CPUID => Some(if self.is_host {
-                self.handle_host_cpuid()
-            } else {
-                self.handle_cpuid()
-            }),
+            VmxExitReason::CPUID => {
+                let ret = self.handle_cpuid();
+                #[cfg(feature = "type1_5")]
+                {
+                    ret = if self.is_host { self.handle_host_cpuid() };
+                }
+                Some(ret)
+            }
             _ => None,
         }
     }
@@ -1110,7 +1112,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 if regs_clone.rcx == 0 {
                     // Bit 05: WAITPKG.
                     res.ecx.set_bit(5, false); // clear waitpkg
-                                               // Bit 16: LA57. Supports 57-bit linear addresses and five-level paging if 1.
+                    // Bit 16: LA57. Supports 57-bit linear addresses and five-level paging if 1.
                     res.ecx.set_bit(16, false); // clear LA57
                 }
 
@@ -1273,6 +1275,6 @@ impl<H: HyperCraftHal> Debug for VmxVcpu<H> {
                 .field("tss", &VmcsGuest16::TR_SELECTOR.read()?)
                 .finish())
         })()
-        .unwrap()
+            .unwrap()
     }
 }
