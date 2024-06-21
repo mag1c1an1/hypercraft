@@ -14,7 +14,7 @@
 )]
 #![deny(missing_docs, warnings)]
 
-#![feature(naked_functions, asm_const, negative_impls, stdsimd, inline_const, concat_idents)]
+#![feature(naked_functions, asm_const, negative_impls, concat_idents)]
 
 #[macro_use]
 extern crate alloc;

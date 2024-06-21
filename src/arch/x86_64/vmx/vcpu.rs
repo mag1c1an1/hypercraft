@@ -109,7 +109,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         self.pending_events.push_back((vector, err_code));
     }
 
-    /// If enable, a VM exit occurs at the beginning of any instruction if
+    /// If enabled, a VM exit occurs at the beginning of any instruction if
     /// `RFLAGS.IF` = 1 and there are no other blocking of interrupts.
     /// (see SDM, Vol. 3C, Section 24.4.2)
     pub fn set_interrupt_window(&mut self, enable: bool) -> HyperResult {
