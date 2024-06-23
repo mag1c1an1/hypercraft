@@ -651,6 +651,10 @@ pub fn exit_info() -> HyperResult<VmxExitInfo> {
     })
 }
 
+pub fn raw_interrupt_exit_info() -> HyperResult<u32> {
+    Ok(VmcsReadOnly32::VMEXIT_INTERRUPTION_INFO.read()?)
+}
+
 pub fn interrupt_exit_info() -> HyperResult<VmxInterruptInfo> {
     // SDM Vol. 3C, Section 24.9.2
     let info = VmcsReadOnly32::VMEXIT_INTERRUPTION_INFO.read()?;

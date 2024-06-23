@@ -148,3 +148,24 @@ impl VmxBasic {
         }
     }
 }
+
+
+#[repr(align(16))]
+pub struct MsrStoreEntry {
+    pub msr_index: u32,
+    pub reserved: u32,
+    pub value: u64,
+}
+
+// max MSRs in auto load/store area
+const MSR_AREA_COUNT: usize = 2;
+
+pub struct MsrStoreArea {
+    pub guest: [MsrStoreEntry; 2],
+    pub host: [MsrStoreEntry; 2],
+    pub index_of_pqr_assoc: u32,
+    // actual count of entries to be loaded/restored during VMEntry/VMExit
+    pub count: u32,
+}
+
+

@@ -17,21 +17,37 @@ use super::VmxPerCpuState;
 use super::definitions::VmxExitReason;
 use crate::arch::{msr::Msr, memory::NestedPageFaultInfo, regs::GeneralRegisters};
 use crate::arch::lapic::ApicTimer;
-use crate::{GuestPhysAddr, HostPhysAddr, HyperCraftHal, HyperResult};
+use crate::{GuestPhysAddr, HostPhysAddr, HyperCraftHal, HyperResult, VmExitInfo, VmxExitInfo};
+
+
+#[derive(Copy, Clone)]
+pub enum VmCpuMode {
+    Real,
+    Protected,
+    Compatibility, // IA-32e mode (CS.L = 0)
+    Long, // IA-32E mode (CS.L = 1)
+}
+
 
 /// A virtual CPU within a guest.
 #[repr(C)]
 pub struct VmxVcpu<H: HyperCraftHal> {
-    guest_regs: GeneralRegisters,
-    host_stack_top: u64,
-    vmcs: VmxRegion<H>,
-    msr_bitmap: MsrBitmap<H>,
-    apic_timer: ApicTimer<H>,
-    pending_events: VecDeque<(u8, Option<u32>)>,
+    pub guest_regs: GeneralRegisters,
+    pub host_stack_top: u64,
+    pub vmcs: VmxRegion<H>,
+    pub msr_bitmap: MsrBitmap<H>,
+    pub apic_timer: ApicTimer<H>,
+    pub pending_events: VecDeque<(u8, Option<u32>)>,
+    pub is_launched: bool,
+
+    // Information related to secondary / AP vcpu start-up
+    pub cpu_mode: VmCpuMode,
+    pub nr_sipi: u8,
 }
 
+
 impl<H: HyperCraftHal> VmxVcpu<H> {
-    pub(crate) fn new(
+    pub fn new(
         percpu: &VmxPerCpuState<H>,
         entry: GuestPhysAddr,
         ept_root: HostPhysAddr,
@@ -43,6 +59,9 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             msr_bitmap: MsrBitmap::passthrough_all()?,
             apic_timer: ApicTimer::new(),
             pending_events: VecDeque::with_capacity(8),
+            is_launched: false,
+            cpu_mode: VmCpuMode::Real,
+            nr_sipi: 0,
         };
         vcpu.setup_msr_bitmap()?;
         vcpu.setup_vmcs(entry, ept_root)?;
@@ -50,17 +69,66 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         Ok(vcpu)
     }
 
-    /// Run the guest, never return.
-    pub fn run(&mut self) -> ! {
-        VmcsHostNW::RSP
-            .write(&self.host_stack_top as *const _ as usize)
-            .unwrap();
-        unsafe { self.vmx_launch() }
+    /// Bind this [`vmxvcpu`] to current cpu
+    pub fn bind_to_current_cpu(&self) -> HyperResult {
+        unsafe {
+            vmx::vmptrld(self.vmcs.phys_addr() as u64)?;
+        }
+        Ok(())
+    }
+
+    /// Unbind this [`vmxvcpu`] to current cpu
+    pub fn unbind_to_current_cpu(&self) -> HyperResult {
+        unsafe {
+            vmx::vmclear(self.vmcs.phys_addr() as u64)?;
+        }
+        Ok(())
+    }
+
+    pub fn cpu_mode(&self) -> VmCpuMode {
+        todo!()
+    }
+
+    /// Run the guest. It returns when a vm-exit happens and returns the vm-exit if it cannot be handled by this [`VmxVcpu`] itself.
+    pub fn run(&mut self) -> Option<VmxExitInfo> {
+        if self.is_launched {
+            self.inject_pending_events().unwrap();
+        }
+        unsafe {
+            if self.is_launched {
+                self.vmx_resume();
+            } else {
+                self.is_launched = true;
+                VmcsHostNW::RSP
+                    .write(&self.host_stack_top as *const _ as usize)
+                    .unwrap();
+                self.vmx_launch();
+            }
+        }
+
+        // handle vm-exits
+        let exit_info = self.exit_info().unwrap();
+        trace!("VM exit: {:#x?}",exit_info);
+        match self.builtin_vmexit_handler(&exit_info) {
+            None => {
+                Some(exit_info)
+            }
+            Some(res) => {
+                if res.is_err() {
+                    panic!("VmxVcpu failed to handle a VM-exit that should be handled by itself");
+                }
+                None
+            }
+        }
     }
 
     /// Basic information about VM exits.
     pub fn exit_info(&self) -> HyperResult<vmcs::VmxExitInfo> {
         vmcs::exit_info()
+    }
+
+    pub fn raw_interrupt_exit_info(&self) -> HyperResult<u32> {
+        vmcs::raw_interrupt_exit_info()
     }
 
     /// Information for VM exits due to external interrupts.
@@ -98,6 +166,16 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         VmcsGuestNW::RSP.write(rsp).unwrap()
     }
 
+    /// Guest rip. (`RIP`)
+    pub fn rip(&self) -> usize {
+        VmcsGuestNW::RIP.read().unwrap()
+    }
+
+    /// Guest cs. (`cs`)
+    pub fn cs(&self) -> u16 {
+        VmcsGuest16::CS_SELECTOR.read().unwrap()
+    }
+
     /// Advance guest `RIP` by `instr_len` bytes.
     pub fn advance_rip(&mut self, instr_len: u8) -> HyperResult {
         Ok(VmcsGuestNW::RIP.write(VmcsGuestNW::RIP.read()? + instr_len as usize)?)
@@ -105,7 +183,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
     /// Add a virtual interrupt or exception to the pending events list,
     /// and try to inject it before later VM entries.
-    pub fn inject_event(&mut self, vector: u8, err_code: Option<u32>) {
+    pub fn queue_event(&mut self, vector: u8, err_code: Option<u32>) {
         self.pending_events.push_back((vector, err_code));
     }
 
@@ -122,6 +200,13 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         }
         VmcsControl32::PRIMARY_PROCBASED_EXEC_CONTROLS.write(ctrl)?;
         Ok(())
+    }
+
+    /// Set msr intercept by modifying msr bitmap.
+    /// Todo: distinguish read and write.
+    pub fn set_msr_intercept_of_range(&mut self, msr: u32, intercept: bool) {
+        self.msr_bitmap.set_read_intercept(msr, intercept);
+        self.msr_bitmap.set_write_intercept(msr, intercept);
     }
 
     /// Returns the mutable reference of [`ApicTimer`].
@@ -149,11 +234,12 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         let paddr = self.vmcs.phys_addr() as u64;
         unsafe {
             vmx::vmclear(paddr)?;
-            vmx::vmptrld(paddr)?;
         }
+        self.bind_to_current_cpu()?;
         self.setup_vmcs_host()?;
         self.setup_vmcs_guest(entry)?;
         self.setup_vmcs_control(ept_root)?;
+        self.unbind_to_current_cpu()?;
         Ok(())
     }
 
@@ -334,38 +420,59 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         VmcsControl64::MSR_BITMAPS_ADDR.write(self.msr_bitmap.phys_addr() as _)?;
         Ok(())
     }
+}
 
-    #[naked]
-    unsafe extern "C" fn vmx_launch(&mut self) -> ! {
+/// Get ready then vmlaunch or vmresume.
+macro_rules! vmx_entry_with {
+    ($instr:literal) => {
         asm!(
+            save_regs_to_stack!(),                  // save host status
             "mov    [rdi + {host_stack_top}], rsp", // save current RSP to Vcpu::host_stack_top
             "mov    rsp, rdi",                      // set RSP to guest regs area
-            restore_regs_from_stack!(),
-            "vmlaunch",
+            restore_regs_from_stack!(),             // restore guest status
+            $instr,                                 // let's go!
             "jmp    {failed}",
             host_stack_top = const size_of::<GeneralRegisters>(),
             failed = sym Self::vmx_entry_failed,
             options(noreturn),
         )
     }
+}
 
+
+impl<H: HyperCraftHal> VmxVcpu<H> {
+    /// Enter guest with vmlaunch.
+    ///
+    /// `#[naked]` is essential here, without it the rust compiler will think `&mut self` is not used and won't give us correct %rdi.
+    ///
+    /// This function itself never returns, but [`Self::vmx_exit`] will do the return for this.
+    ///
+    /// The return value is a dummy value.
     #[naked]
-    unsafe extern "C" fn vmx_exit(&mut self) -> ! {
+    unsafe extern "C" fn vmx_launch(&mut self) {
+        vmx_entry_with!("vmlaunch")
+    }
+    /// Enter guest with vmresume.
+    ///
+    /// See [`Self::vmx_launch`] for detail.
+    #[naked]
+    unsafe extern "C" fn vmx_resume(&mut self) {
+        vmx_entry_with!("vmresume")
+    }
+
+    /// Return after vm-exit.
+    ///
+    /// The return value is a dummy value.
+    #[naked]
+    unsafe extern "C" fn vmx_exit(&mut self) {
         asm!(
             save_regs_to_stack!(),
-            "mov    r15, rsp",                      // save temporary RSP to r15
-            "mov    rdi, rsp",                      // set the first arg to &Vcpu
             "mov    rsp, [rsp + {host_stack_top}]", // set RSP to Vcpu::host_stack_top
-            "call   {vmexit_handler}",              // call vmexit_handler
-            "mov    rsp, r15",                      // load temporary RSP from r15
             restore_regs_from_stack!(),
-            "vmresume",
-            "jmp    {failed}",
+            "ret",
             host_stack_top = const size_of::<GeneralRegisters>(),
-            vmexit_handler = sym Self::vmexit_handler,
-            failed = sym Self::vmx_entry_failed,
             options(noreturn),
-        );
+        )
     }
 
     fn vmx_entry_failed() -> ! {
@@ -381,7 +488,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     }
 
     /// Try to inject a pending event before next VM entry.
-    fn check_pending_events(&mut self) -> HyperResult {
+    fn inject_pending_events(&mut self) -> HyperResult {
         if let Some(event) = self.pending_events.front() {
             if event.0 < 32 || self.allow_interrupt() {
                 // if it's an exception, or an interrupt that is not blocked, inject it directly.
@@ -395,38 +502,132 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         Ok(())
     }
 
-    fn vmexit_handler(&mut self) {
-        let exit_info = self.exit_info().unwrap();
-
+    /// Handle vm-exits than can and should be handled by [`VmxVcpu`] itself.
+    ///
+    /// Return the result or None if the vm-exit was not handled.
+    fn builtin_vmexit_handler(&mut self, exit_info: &VmExitInfo) -> Option<HyperResult> {
         if exit_info.entry_failure {
             panic!("VM entry failed: {:#x?}", exit_info);
         }
 
-        trace!("VM exit: {:#x?}", exit_info);
 
-        // Handle some vmexits concerning apic timer and events here.
-        // Theoretically the best practice is enabling users to inject
-        // anything they want (including apic timers) to vcpus and let
-        // them handle all vmexits, but it's not very pragmatic now.
-        let result: HyperResult = match exit_info.exit_reason {
-            VmxExitReason::INTERRUPT_WINDOW => self.set_interrupt_window(false),
-            _ => H::vmexit_handler(self),
+        // Following vm-exits are handled here:
+        // - interrupt window: turn off interrupt window;
+        // - xsetbv: set guest xcr;
+        // - cr access: just panic;
+        let ret = match exit_info.exit_reason {
+            VmxExitReason::INTERRUPT_WINDOW => Some(self.set_interrupt_window(false)),
+            VmxExitReason::PREEMPTION_TIMER => Some(self.handle_vmx_preemption_timer()),
+            // VmxExitReason::XSETBV => Some(self.handle_xsetbv()),
+            VmxExitReason::CR_ACCESS => Some(self.handle_cr()),
+            VmxExitReason::CPUID => Some(self.handle_cpuid()),
+            _ => None,
         };
-
-        if result.is_err() {
-            panic!(
-                "Failed to handle VM-exit {:?}, error {:?}:\n{:#x?}",
-                exit_info.exit_reason, result.err().unwrap(), self
-            );
-        }
 
         // Check if there is an APIC timer interrupt
         if self.apic_timer.check_interrupt() {
-            self.inject_event(self.apic_timer.vector(), None);
+            self.queue_event(self.apic_timer.vector(), None);
         }
-        self.check_pending_events().unwrap();
+        self.inject_pending_events().unwrap();
+        ret
+    }
+
+    fn handle_vmx_preemption_timer(&mut self) -> HyperResult {
+        todo!()
+    }
+    fn handle_cr(&mut self) -> HyperResult {
+        todo!()
+    }
+
+    fn handle_cpuid(&mut self) -> HyperResult {
+        use raw_cpuid::{cpuid, CpuIdResult};
+
+        const VM_EXIT_INSTR_LEN_CPUID: u8 = 2;
+        const LEAF_FEATURE_INFO: u32 = 0x1;
+        const LEAF_STRUCTURED_EXTENDED_FEATURE_FLAGS_ENUMERATION: u32 = 0x7;
+        const LEAF_PROCESSOR_EXTENDED_STATE_ENUMERATION: u32 = 0xd;
+        const EAX_FREQUENCY_INFO: u32 = 0x16;
+        const LEAF_HYPERVISOR_INFO: u32 = 0x4000_0000;
+        const LEAF_HYPERVISOR_FEATURE: u32 = 0x4000_0001;
+        const VENDOR_STR: &[u8; 12] = b"RVMRVMRVMRVM";
+        let vendor_regs = unsafe { &*(VENDOR_STR.as_ptr() as *const [u32; 3]) };
+
+        let regs_clone = self.regs_mut().clone();
+        let function = regs_clone.rax as u32;
+        let res = match function {
+            LEAF_FEATURE_INFO => {
+                const FEATURE_VMX: u32 = 1 << 5;
+                const FEATURE_HYPERVISOR: u32 = 1 << 31;
+                const FEATURE_MCE: u32 = 1 << 7;
+                let mut res = cpuid!(regs_clone.rax, regs_clone.rcx);
+                res.ecx &= !FEATURE_VMX;
+                res.ecx |= FEATURE_HYPERVISOR;
+                res.eax &= !FEATURE_MCE;
+                res
+            }
+            // See SDM Table 3-8. Information Returned by CPUID Instruction (Contd.)
+            LEAF_STRUCTURED_EXTENDED_FEATURE_FLAGS_ENUMERATION => {
+                let mut res = cpuid!(regs_clone.rax, regs_clone.rcx);
+                if regs_clone.rcx == 0 {
+                    // Bit 05: WAITPKG.
+                    res.ecx.set_bit(5, false); // clear waitpkg
+                    // Bit 16: LA57. Supports 57-bit linear addresses and five-level paging if 1.
+                    res.ecx.set_bit(16, false); // clear LA57
+                }
+
+                res
+            }
+            LEAF_PROCESSOR_EXTENDED_STATE_ENUMERATION => {
+                let res = cpuid!(regs_clone.rax, regs_clone.rcx);
+                res
+            }
+            LEAF_HYPERVISOR_INFO => CpuIdResult {
+                eax: LEAF_HYPERVISOR_FEATURE,
+                ebx: vendor_regs[0],
+                ecx: vendor_regs[1],
+                edx: vendor_regs[2],
+            },
+            LEAF_HYPERVISOR_FEATURE => CpuIdResult {
+                eax: 0,
+                ebx: 0,
+                ecx: 0,
+                edx: 0,
+            },
+            EAX_FREQUENCY_INFO => {
+                /// Timer interrupt frequencyin Hz.
+                /// Todo: this should be the same as `axconfig::TIMER_FREQUENCY` defined in ArceOS's config file.
+                const TIMER_FREQUENCY_MHz: u32 = 3_000;
+                let mut res = cpuid!(regs_clone.rax, regs_clone.rcx);
+                if res.eax == 0 {
+                    warn!(
+                        "handle_cpuid: Failed to get TSC frequency by CPUID, default to {} MHz",
+                        TIMER_FREQUENCY_MHz
+                    );
+                    res.eax = TIMER_FREQUENCY_MHz;
+                }
+                res
+            }
+            _ => cpuid!(regs_clone.rax, regs_clone.rcx),
+        };
+
+        trace!(
+            "VM exit: CPUID({:#x}, {:#x}): {:?}",
+            regs_clone.rax,
+            regs_clone.rcx,
+            res
+        );
+
+        let regs = self.regs_mut();
+        regs.rax = res.eax as _;
+        regs.rbx = res.ebx as _;
+        regs.rcx = res.ecx as _;
+        regs.rdx = res.edx as _;
+        self.advance_rip(VM_EXIT_INSTR_LEN_CPUID)?;
+
+        Ok(())
     }
 }
+
 
 impl<H: HyperCraftHal> Drop for VmxVcpu<H> {
     fn drop(&mut self) {
@@ -468,6 +669,6 @@ impl<H: HyperCraftHal> Debug for VmxVcpu<H> {
                 .field("tss", &VmcsGuest16::TR_SELECTOR.read()?)
                 .finish())
         })()
-        .unwrap()
+            .unwrap()
     }
 }

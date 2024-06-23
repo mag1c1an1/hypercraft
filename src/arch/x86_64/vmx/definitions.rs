@@ -137,7 +137,7 @@ pub enum VmxInterruptionType {
     Reserved = 1,
     /// Non-maskable interrupt (NMI)
     NMI = 2,
-    /// Hardware exception (e.g,. #PF)
+    /// Hardware exception (e.g. #PF)
     HardException = 3,
     /// Software interrupt (INT n)
     SoftIntr = 4,

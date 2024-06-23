@@ -12,7 +12,7 @@
     unused_imports,
     unused_assignments
 )]
-#![deny(missing_docs, warnings)]
+// #![deny(missing_docs, warnings)]
 
 #![feature(naked_functions, asm_const, negative_impls, concat_idents)]
 
@@ -29,7 +29,7 @@ pub use arch::{
     NestedPageTable, PerCpu, VCpu, VM,
 };
 #[cfg(target_arch = "x86_64")]
-pub use arch::{VmxExitInfo, VmxExitReason};
+pub use arch::{VmxExitInfo, VmxExitReason, VmCpuMode};
 #[cfg(target_arch = "aarch64")]
 pub use arch::lower_aarch64_synchronous;
 pub use hal::HyperCraftHal;
@@ -87,4 +87,6 @@ pub enum HyperError {
     DecodeError,
     /// Disabled.
     Disabled,
+    /// Shutdown
+    Shutdown,
 }

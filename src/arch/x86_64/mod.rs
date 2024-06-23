@@ -5,6 +5,7 @@ pub use percpu::PerCpu;
 pub use vmx::{VmxExitInfo, VmxExitReason};
 /// VCpu define.
 pub use vmx::VmxVcpu as VCpu;
+pub use vmx::VmCpuMode;
 
 use crate::{GuestPageTableTrait, HyperCraftHal};
 
@@ -44,7 +45,7 @@ pub struct VM<H: HyperCraftHal> {
 }
 
 /// VM exit information.
-pub struct VmExitInfo {}
+pub use VmxExitInfo as VmExitInfo;
 
 /// General purpose register index.
 pub enum GprIndex {}
