@@ -50,7 +50,7 @@ impl Msr {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that this write operation has no unsafe side
+    /// The caller must ensure that this writes operation has no unsafe side
     /// effects.
     #[inline(always)]
     pub unsafe fn write(self, value: u64) {

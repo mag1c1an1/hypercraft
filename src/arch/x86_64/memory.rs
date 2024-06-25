@@ -1,5 +1,6 @@
 use bitflags;
 use core::marker::PhantomData;
+use core::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
 
 use crate::{HyperCraftHal, HostPhysAddr, GuestPhysAddr};
 use crate::{HyperResult, HyperError};
@@ -59,6 +60,16 @@ impl<H: HyperCraftHal> PhysFrame<H> {
 
     pub fn fill(&mut self, byte: u8) {
         unsafe { core::ptr::write_bytes(self.as_mut_ptr(), byte, H::PAGE_SIZE) }
+    }
+}
+
+impl<H: HyperCraftHal> Clone for PhysFrame<H> {
+    fn clone(&self) -> Self {
+        let mut other = Self::alloc_zero().unwrap();
+        let src = unsafe { slice_from_raw_parts(self.as_mut_ptr(), H::PAGE_SIZE).as_ref() }.unwrap();
+        let mut dst = unsafe { slice_from_raw_parts_mut(other.as_mut_ptr(), H::PAGE_SIZE).as_mut().unwrap() };
+        unsafe { dst.copy_from_slice(&*src); }
+        other
     }
 }
 

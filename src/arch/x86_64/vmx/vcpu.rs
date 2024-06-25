@@ -28,7 +28,6 @@ pub enum VmCpuMode {
     Long, // IA-32E mode (CS.L = 1)
 }
 
-
 /// A virtual CPU within a guest.
 #[repr(C)]
 pub struct VmxVcpu<H: HyperCraftHal> {
@@ -45,17 +44,13 @@ pub struct VmxVcpu<H: HyperCraftHal> {
     pub nr_sipi: u8,
 }
 
-
 impl<H: HyperCraftHal> VmxVcpu<H> {
-    pub fn new(
-        percpu: &VmxPerCpuState<H>,
-        entry: GuestPhysAddr,
-        ept_root: HostPhysAddr,
-    ) -> HyperResult<Self> {
+    /// common
+    pub fn new_common(vmcs_revision_id: u32) -> HyperResult<Self> {
         let mut vcpu = Self {
             guest_regs: GeneralRegisters::default(),
             host_stack_top: 0,
-            vmcs: VmxRegion::new(percpu.vmcs_revision_id, false)?,
+            vmcs: VmxRegion::new(vmcs_revision_id, false)?,
             msr_bitmap: MsrBitmap::passthrough_all()?,
             apic_timer: ApicTimer::new(),
             pending_events: VecDeque::with_capacity(8),
@@ -64,8 +59,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             nr_sipi: 0,
         };
         vcpu.setup_msr_bitmap()?;
-        vcpu.setup_vmcs(entry, ept_root)?;
-        info!("[HV] created VmxVcpu(vmcs: {:#x})", vcpu.vmcs.phys_addr());
         Ok(vcpu)
     }
 
@@ -89,8 +82,40 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         todo!()
     }
 
+    /// setup start entry
+    pub fn set_entry(&mut self, entry: GuestPhysAddr) -> HyperResult {
+        VmcsGuestNW::RIP.write(entry)?;
+        Ok(())
+    }
+}
+
+
+impl<H: HyperCraftHal> VmxVcpu<H> {
+    pub fn new(
+        percpu: &VmxPerCpuState<H>,
+        entry: GuestPhysAddr,
+        ept_root: HostPhysAddr,
+    ) -> HyperResult<Self> {
+        let mut vcpu = Self {
+            guest_regs: GeneralRegisters::default(),
+            host_stack_top: 0,
+            vmcs: VmxRegion::new(percpu.vmcs_revision_id, false)?,
+            msr_bitmap: MsrBitmap::passthrough_all()?,
+            apic_timer: ApicTimer::new(),
+            pending_events: VecDeque::with_capacity(8),
+            is_launched: false,
+            cpu_mode: VmCpuMode::Real,
+            nr_sipi: 0,
+        };
+        vcpu.setup_msr_bitmap()?;
+        vcpu.setup_vmcs(Some(entry), ept_root)?;
+        info!("[HV] created VmxVcpu(vmcs: {:#x})", vcpu.vmcs.phys_addr());
+        Ok(vcpu)
+    }
+
     /// Run the guest. It returns when a vm-exit happens and returns the vm-exit if it cannot be handled by this [`VmxVcpu`] itself.
     pub fn run(&mut self) -> Option<VmxExitInfo> {
+        // FIXME
         if self.is_launched {
             self.inject_pending_events().unwrap();
         }
@@ -230,7 +255,8 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         Ok(())
     }
 
-    fn setup_vmcs(&mut self, entry: GuestPhysAddr, ept_root: HostPhysAddr) -> HyperResult {
+    /// setup_vmcs
+    pub fn setup_vmcs(&mut self, entry: Option<GuestPhysAddr>, ept_root: HostPhysAddr) -> HyperResult {
         let paddr = self.vmcs.phys_addr() as u64;
         unsafe {
             vmx::vmclear(paddr)?;
@@ -279,7 +305,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         Ok(())
     }
 
-    fn setup_vmcs_guest(&mut self, entry: GuestPhysAddr) -> HyperResult {
+    fn setup_vmcs_guest(&mut self, entry: Option<GuestPhysAddr>) -> HyperResult {
         let cr0_guest = Cr0Flags::EXTENSION_TYPE | Cr0Flags::NUMERIC_ERROR;
         let cr0_host_owned =
             Cr0Flags::NUMERIC_ERROR | Cr0Flags::NOT_WRITE_THROUGH | Cr0Flags::CACHE_DISABLE;
@@ -324,7 +350,10 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         VmcsGuestNW::CR3.write(0)?;
         VmcsGuestNW::DR7.write(0x400)?;
         VmcsGuestNW::RSP.write(0)?;
-        VmcsGuestNW::RIP.write(entry)?;
+
+        if let Some(entry) = entry {
+            VmcsGuestNW::RIP.write(entry)?;
+        }
         VmcsGuestNW::RFLAGS.write(0x2)?;
         VmcsGuestNW::PENDING_DBG_EXCEPTIONS.write(0)?;
         VmcsGuestNW::IA32_SYSENTER_ESP.write(0)?;
@@ -459,7 +488,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     unsafe extern "C" fn vmx_resume(&mut self) {
         vmx_entry_with!("vmresume")
     }
-
     /// Return after vm-exit.
     ///
     /// The return value is a dummy value.

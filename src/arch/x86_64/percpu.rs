@@ -63,6 +63,10 @@ impl<H: HyperCraftHal> PerCpu<H> {
             VCpu::new(&self.arch, entry, npt_root)
         }
     }
+
+    pub fn vmcs_revision_id(&self) -> u32 {
+        self.arch.vmcs_revision_id()
+    }
 }
 
 impl<H: HyperCraftHal> Drop for PerCpu<H> {

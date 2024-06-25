@@ -6,7 +6,6 @@ use crate::{HyperResult, HyperError};
 use crate::arch::memory::PhysFrame;
 
 /// VMCS/VMXON region in 4K size. (SDM Vol. 3C, Section 24.2)
-#[derive(Debug)]
 pub struct VmxRegion<H: HyperCraftHal> {
     frame: PhysFrame<H>,
 }
@@ -32,6 +31,8 @@ impl<H: HyperCraftHal> VmxRegion<H> {
         self.frame.start_paddr()
     }
 }
+
+
 
 
 #[derive(Debug)]

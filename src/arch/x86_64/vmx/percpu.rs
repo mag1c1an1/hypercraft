@@ -21,6 +21,10 @@ impl<H: HyperCraftHal> VmxPerCpuState<H> {
         }
     }
 
+    pub fn vmcs_revision_id(&self) -> u32 {
+        self.vmcs_revision_id
+    }
+
     pub fn is_enabled(&self) -> bool {
         Cr4::read().contains(Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS)
     }
