@@ -19,6 +19,7 @@ use crate::arch::{msr::Msr, memory::NestedPageFaultInfo, regs::GeneralRegisters}
 use crate::arch::lapic::ApicTimer;
 use crate::{GuestPhysAddr, HostPhysAddr, HyperCraftHal, HyperResult, VmExitInfo, VmxExitInfo};
 
+static mut VMX_PREEMPTION_TIMER_SET_VALUE: u32 = 1000_000;
 
 #[derive(Copy, Clone)]
 pub enum VmCpuMode {
@@ -38,7 +39,7 @@ pub struct VmxVcpu<H: HyperCraftHal> {
     pub apic_timer: ApicTimer<H>,
     pub pending_events: VecDeque<(u8, Option<u32>)>,
     pub is_launched: bool,
-
+    pub vcpu_id: usize,
     // Information related to secondary / AP vcpu start-up
     pub cpu_mode: VmCpuMode,
     pub nr_sipi: u8,
@@ -46,8 +47,9 @@ pub struct VmxVcpu<H: HyperCraftHal> {
 
 impl<H: HyperCraftHal> VmxVcpu<H> {
     /// common
-    pub fn new_common(vmcs_revision_id: u32) -> HyperResult<Self> {
+    pub fn new_common(vmcs_revision_id: u32, vcpu_id: usize) -> HyperResult<Self> {
         let mut vcpu = Self {
+            vcpu_id,
             guest_regs: GeneralRegisters::default(),
             host_stack_top: 0,
             vmcs: VmxRegion::new(vmcs_revision_id, false)?,
@@ -97,6 +99,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         ept_root: HostPhysAddr,
     ) -> HyperResult<Self> {
         let mut vcpu = Self {
+            vcpu_id: 0,
             guest_regs: GeneralRegisters::default(),
             host_stack_top: 0,
             vmcs: VmxRegion::new(percpu.vmcs_revision_id, false)?,
@@ -116,10 +119,23 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     /// Run the guest. It returns when a vm-exit happens and returns the vm-exit if it cannot be handled by this [`VmxVcpu`] itself.
     pub fn run(&mut self) -> Option<VmxExitInfo> {
         // FIXME
-        if self.is_launched {
-            self.inject_pending_events().unwrap();
-        }
+        // if self.is_launched {
+        //     self.inject_pending_events().unwrap();
+        // }
+        // unsafe {
+        //     if self.is_launched {
+        //         self.vmx_resume();
+        //     } else {
+        //         self.is_launched = true;
+        //         VmcsHostNW::RSP
+        //             .write(&self.host_stack_top as *const _ as usize)
+        //             .unwrap();
+        //         self.vmx_launch();
+        //     }
+        // }
+
         unsafe {
+            self.inject_pending_events().unwrap();
             if self.is_launched {
                 self.vmx_resume();
             } else {
@@ -130,7 +146,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 self.vmx_launch();
             }
         }
-
         // handle vm-exits
         let exit_info = self.exit_info().unwrap();
         trace!("VM exit: {:#x?}",exit_info);
@@ -257,15 +272,9 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
     /// setup_vmcs
     pub fn setup_vmcs(&mut self, entry: Option<GuestPhysAddr>, ept_root: HostPhysAddr) -> HyperResult {
-        let paddr = self.vmcs.phys_addr() as u64;
-        unsafe {
-            vmx::vmclear(paddr)?;
-        }
-        self.bind_to_current_cpu()?;
         self.setup_vmcs_host()?;
         self.setup_vmcs_guest(entry)?;
         self.setup_vmcs_control(ept_root)?;
-        self.unbind_to_current_cpu()?;
         Ok(())
     }
 
@@ -362,7 +371,8 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
         VmcsGuest32::INTERRUPTIBILITY_STATE.write(0)?;
         VmcsGuest32::ACTIVITY_STATE.write(0)?;
-        VmcsGuest32::VMX_PREEMPTION_TIMER_VALUE.write(0)?;
+        // set timer
+        VmcsGuest32::VMX_PREEMPTION_TIMER_VALUE.write(unsafe { VMX_PREEMPTION_TIMER_SET_VALUE })?;
 
         VmcsGuest64::LINK_PTR.write(u64::MAX)?; // SDM Vol. 3C, Section 24.4.2
         VmcsGuest64::IA32_DEBUGCTL.write(0)?;
@@ -379,7 +389,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             VmcsControl32::PINBASED_EXEC_CONTROLS,
             Msr::IA32_VMX_TRUE_PINBASED_CTLS,
             Msr::IA32_VMX_PINBASED_CTLS.read() as u32,
-            (PinCtrl::NMI_EXITING | PinCtrl::EXTERNAL_INTERRUPT_EXITING).bits(),
+            (PinCtrl::NMI_EXITING | PinCtrl::EXTERNAL_INTERRUPT_EXITING | PinCtrl::VMX_PREEMPTION_TIMER).bits(),
             0,
         )?;
 
@@ -545,7 +555,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         // - cr access: just panic;
         let ret = match exit_info.exit_reason {
             VmxExitReason::INTERRUPT_WINDOW => Some(self.set_interrupt_window(false)),
-            VmxExitReason::PREEMPTION_TIMER => Some(self.handle_vmx_preemption_timer()),
             // VmxExitReason::XSETBV => Some(self.handle_xsetbv()),
             VmxExitReason::CR_ACCESS => Some(self.handle_cr()),
             VmxExitReason::CPUID => Some(self.handle_cpuid()),
@@ -560,8 +569,15 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         ret
     }
 
-    fn handle_vmx_preemption_timer(&mut self) -> HyperResult {
-        todo!()
+    pub fn reset_timer(&mut self) -> HyperResult {
+        /*
+           The VMX-preemption timer counts down at rate proportional to that of the timestamp counter (TSC).
+           Specifically, the timer counts down by 1 every time bit X in the TSC changes due to a TSC increment.
+           The value of X is in the range 0–31 and can be determined by consulting the VMX capability MSR IA32_VMX_MISC (see Appendix A.6).
+        */
+        error!("reset vmx timer");
+        VmcsGuest32::VMX_PREEMPTION_TIMER_VALUE.write(unsafe { VMX_PREEMPTION_TIMER_SET_VALUE })?;
+        Ok(())
     }
     fn handle_cr(&mut self) -> HyperResult {
         todo!()
@@ -588,6 +604,8 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 const FEATURE_HYPERVISOR: u32 = 1 << 31;
                 const FEATURE_MCE: u32 = 1 << 7;
                 let mut res = cpuid!(regs_clone.rax, regs_clone.rcx);
+                debug!("set cpu id as vcpu id {}", self.vcpu_id);
+                res.ebx.set_bits(24..=31, self.vcpu_id as u32);
                 res.ecx &= !FEATURE_VMX;
                 res.ecx |= FEATURE_HYPERVISOR;
                 res.eax &= !FEATURE_MCE;
@@ -622,7 +640,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 edx: 0,
             },
             EAX_FREQUENCY_INFO => {
-                /// Timer interrupt frequencyin Hz.
+                /// Timer interrupt frequency Hz.
                 /// Todo: this should be the same as `axconfig::TIMER_FREQUENCY` defined in ArceOS's config file.
                 const TIMER_FREQUENCY_MHz: u32 = 3_000;
                 let mut res = cpuid!(regs_clone.rax, regs_clone.rcx);
