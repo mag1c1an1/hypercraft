@@ -579,8 +579,80 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         VmcsGuest32::VMX_PREEMPTION_TIMER_VALUE.write(unsafe { VMX_PREEMPTION_TIMER_SET_VALUE })?;
         Ok(())
     }
+
+    fn set_cr(&mut self, cr_idx: usize, val: u64) {
+        (|| -> HyperResult {
+            // debug!("set guest CR{} to val {:#x}", cr_idx, val);
+            match cr_idx {
+                0 => {
+                    // Retrieve/validate restrictions on CR0
+                    //
+                    // In addition to what the VMX MSRs tell us, make sure that
+                    // - NW and CD are kept off as they are not updated on VM exit and we
+                    //   don't want them enabled for performance reasons while in root mode
+                    // - PE and PG can be freely chosen (by the guest) because we demand
+                    //   unrestricted guest mode support anyway
+                    // - ET is ignored
+                    let must0 = Msr::IA32_VMX_CR0_FIXED1.read()
+                        & !(Cr0Flags::NOT_WRITE_THROUGH | Cr0Flags::CACHE_DISABLE).bits();
+                    let must1 = Msr::IA32_VMX_CR0_FIXED0.read()
+                        & !(Cr0Flags::PAGING | Cr0Flags::PROTECTED_MODE_ENABLE).bits();
+                    VmcsGuestNW::CR0.write(((val & must0) | must1) as _)?;
+                    VmcsControlNW::CR0_READ_SHADOW.write(val as _)?;
+                    VmcsControlNW::CR0_GUEST_HOST_MASK.write((must1 | !must0) as _)?;
+                }
+                3 => VmcsGuestNW::CR3.write(val as _)?,
+                4 => {
+                    // Retrieve/validate restrictions on CR4
+                    let must0 = Msr::IA32_VMX_CR4_FIXED1.read();
+                    let must1 = Msr::IA32_VMX_CR4_FIXED0.read();
+                    let val = val | Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS.bits();
+                    VmcsGuestNW::CR4.write(((val & must0) | must1) as _)?;
+                    VmcsControlNW::CR4_READ_SHADOW.write(val as _)?;
+                    VmcsControlNW::CR4_GUEST_HOST_MASK.write((must1 | !must0) as _)?;
+                }
+                _ => unreachable!(),
+            };
+            Ok(())
+        })()
+            .expect("Failed to write guest control register")
+    }
+
+
     fn handle_cr(&mut self) -> HyperResult {
-        todo!()
+        const VM_EXIT_INSTR_LEN_MV_TO_CR: u8 = 3;
+
+        let cr_access_info = vmcs::cr_access_info()?;
+
+        let reg = cr_access_info.gpr;
+        let cr = cr_access_info.cr_number;
+
+        match cr_access_info.access_type {
+            /* move to cr */
+            0 => {
+                let val = if reg == 4 {
+                    self.stack_pointer() as u64
+                } else {
+                    self.guest_regs.get_reg_of_index(reg)
+                };
+                if cr == 0 || cr == 4 {
+                    self.advance_rip(VM_EXIT_INSTR_LEN_MV_TO_CR)?;
+                    /* TODO: check for #GP reasons */
+                    self.set_cr(cr as usize, val);
+
+                    if cr == 0 && Cr0Flags::from_bits_truncate(val).contains(Cr0Flags::PAGING) {
+                        vmcs::update_efer()?;
+                    }
+                    return Ok(());
+                }
+            }
+            _ => {}
+        };
+
+        panic!(
+            "Guest's access to cr not allowed: {:#x?}, {:#x?}",
+            self, cr_access_info
+        );
     }
 
     fn handle_cpuid(&mut self) -> HyperResult {
