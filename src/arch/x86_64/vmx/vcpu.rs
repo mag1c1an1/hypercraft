@@ -140,9 +140,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 self.vmx_resume();
             } else {
                 self.is_launched = true;
-                VmcsHostNW::RSP
-                    .write(&self.host_stack_top as *const _ as usize)
-                    .unwrap();
                 self.vmx_launch();
             }
         }
@@ -311,6 +308,11 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         VmcsHostNW::IA32_SYSENTER_ESP.write(0)?;
         VmcsHostNW::IA32_SYSENTER_EIP.write(0)?;
         VmcsHost32::IA32_SYSENTER_CS.write(0)?;
+
+        VmcsHostNW::RSP
+            .write(&self.host_stack_top as *const _ as usize)
+            .unwrap();
+
         Ok(())
     }
 
